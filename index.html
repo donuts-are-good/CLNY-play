@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLNY: Deep Orbit Charter</title>
+<link rel="icon" href="favicon.png">
+<meta name="description" content="Build a space station one module at a time. Send out ships for ore, ice and salvage. Keep the charter. A 1996 isometric colony sim by Pugly Games, playable in your browser.">
+<meta name="theme-color" content="#05060c">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="CLNY">
+<meta property="og:title" content="CLNY: Deep Orbit Charter">
+<meta property="og:description" content="Build a space station one module at a time. Send out ships for ore, ice and salvage. Keep the charter. Play it in your browser.">
+<meta property="og:url" content="https://donuts-are-good.github.io/CLNY-play/">
+<meta property="og:image" content="https://donuts-are-good.github.io/CLNY-play/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="An isometric pixel art space station with glowing towers, docked ships and four engine beams, under the CLNY logo.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="CLNY: Deep Orbit Charter">
+<meta name="twitter:description" content="Build a space station one module at a time. Send out ships for ore, ice and salvage. Play it in your browser.">
+<meta name="twitter:image" content="https://donuts-are-good.github.io/CLNY-play/og.png">
+<style>
+html, body { margin: 0; height: 100%; background: #05060c; overflow: hidden; }
+#load { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; background: #05060c; color: #3fd8ec; font: 14px monospace; letter-spacing: 2px; transition: opacity .3s; }
+#box { width: min(420px, calc(100vw - 32px)); }
+#title { font-size: 28px; letter-spacing: 10px; color: #e8f6ff; margin-bottom: 18px; }
+#bar { height: 12px; border: 2px solid #1d6f7c; padding: 2px; }
+#fill { height: 100%; width: 0; background: #3fd8ec; transition: width .2s; }
+#row { display: flex; justify-content: space-between; margin-top: 10px; }
+#status { color: #e8f6ff; }
+#time, #log { color: #5b6b80; }
+#log { margin-top: 14px; font-size: 12px; line-height: 18px; min-height: 90px; }
+</style>
+</head>
+<body>
+<div id="load"><div id="box">
+<div id="title">CLNY</div>
+<div id="bar"><div id="fill"></div></div>
+<div id="row"><span id="status">STARTING</span><span id="time">0S</span></div>
+<div id="log"></div>
+</div></div>
+<script src="wasm_exec.js?v=109af7c"></script>
+<script>
+const keep = new Set(["F1", "F5", "Tab", "Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Backspace"]);
+window.addEventListener("keydown", e => { if (keep.has(e.code)) e.preventDefault(); }, { capture: true });
+window.addEventListener("contextmenu", e => e.preventDefault(), { capture: true });
+// the deploy writes these and version.json; a cached page still finds the newest build through version.json
+let wasmVer = "109af7c", wasmSize = 17698418;
+const $ = id => document.getElementById(id);
+const t0 = performance.now();
+const tick = setInterval(() => { $("time").textContent = Math.floor((performance.now() - t0) / 1000) + "S"; }, 250);
+let last = "";
+window.clnyStatus = (text, frac) => {
+  const step = text.replace(/ [\d.]+ \/ [\d.]+ MB$/, "");
+  if (step !== last) {
+    if (last) {
+      const line = document.createElement("div");
+      line.textContent = last + " ... OK";
+      $("log").appendChild(line);
+      while ($("log").children.length > 5) $("log").firstChild.remove();
+    }
+    last = step;
+  }
+  $("status").textContent = text;
+  if (frac >= 0) $("fill").style.width = Math.round(Math.min(1, frac) * 100) + "%";
+};
+window.clnyReady = () => {
+  clearInterval(tick);
+  clnyStatus("READY", 1);
+  $("load").style.opacity = 0;
+  setTimeout(() => $("load").remove(), 350);
+};
+const fail = e => { clearInterval(tick); $("status").textContent = "FAILED TO LOAD: " + e; $("status").style.color = "#ff6a5a"; };
+async function fetchWasm() {
+  try {
+    const v = await fetch("version.json", { cache: "no-store" });
+    if (v.ok) ({ v: wasmVer, size: wasmSize } = await v.json());
+  } catch (e) {}
+  const r = await fetch(wasmVer ? "clny.wasm?v=" + wasmVer : "clny.wasm");
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  const total = wasmSize || (r.headers.get("content-encoding") ? 0 : +r.headers.get("content-length"));
+  if (!r.body || !total) {
+    clnyStatus("DOWNLOADING", 0.1);
+    return r.arrayBuffer();
+  }
+  const reader = r.body.getReader();
+  const buf = new Uint8Array(total);
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (got + value.length > buf.length) throw new Error("size mismatch");
+    buf.set(value, got);
+    got += value.length;
+    clnyStatus("DOWNLOADING " + (got / 1048576).toFixed(1) + " / " + (total / 1048576).toFixed(1) + " MB", 0.4 * got / total);
+  }
+  return buf.subarray(0, got);
+}
+(async () => {
+  try {
+    const go = new Go();
+    const bytes = await fetchWasm();
+    clnyStatus("COMPILING THE GAME", 0.42);
+    await new Promise(r => setTimeout(r, 30));
+    const { instance } = await WebAssembly.instantiate(bytes, go.importObject);
+    clnyStatus("STARTING THE ENGINE", 0.48);
+    go.run(instance);
+  } catch (e) {
+    fail(e);
+  }
+})();
+</script>
+</body>
+</html>
